@@ -154,7 +154,7 @@ NSData* extractImageData(UIImage* image){
 
 
 
--(NSMutableDictionary *)mapImageToAsset:(UIImage *)image data:(NSData *)data phAsset:(PHAsset * _Nullable)phAsset {
+-(NSMutableDictionary *)mapImageToAsset:(UIImage *)image data:(NSData *)data originalFileName:(NSString *)originalFileName phAsset:(PHAsset * _Nullable)phAsset {
     NSString *fileType = [ImagePickerUtils getFileType:data];
     if (target == camera) {
         if ([self.options[@"saveToPhotos"] boolValue]) {
@@ -182,7 +182,7 @@ NSData* extractImageData(UIImage* image){
     NSMutableDictionary *asset = [[NSMutableDictionary alloc] init];
     asset[@"type"] = [@"image/" stringByAppendingString:fileType];
 
-    NSString *fileName = [self getImageFileName:fileType];
+    NSString *fileName = [self getFileNameFromPHAsset:phAsset originalFileName:originalFileName];
     NSString *path = [[NSTemporaryDirectory() stringByStandardizingPath] stringByAppendingPathComponent:fileName];
     [data writeToFile:path atomically:YES];
 
@@ -409,11 +409,37 @@ CGImagePropertyOrientation CGImagePropertyOrientationForUIImageOrientation(UIIma
     }
 }
 
-- (NSString *)getImageFileName:(NSString *)fileType
+- (NSString *)extractFileNameFromInfo:(NSDictionary<NSString *,id> *)info 
+ {
+    NSString *fileName = nil;
+
+    if (@available(iOS 11, *)) {
+        NSURL *imageURL = info[UIImagePickerControllerImageURL];
+        fileName = [imageURL lastPathComponent];
+    } else {
+        NSURL *referenceURL = info[UIImagePickerControllerReferenceURL];
+        if (referenceURL) {
+            PHFetchResult<PHAsset *> *result = [PHAsset fetchAssetsWithALAssetURLs:@[referenceURL] options:nil];
+            PHAsset *asset = result.firstObject;
+            fileName = [self getFileNameFromPHAsset:asset originalFileName:nil];
+        } else {
+            NSString *uuid = [[NSUUID UUID] UUIDString];
+            fileName = [uuid stringByAppendingPathExtension:@"jpg"];
+        }
+    }
+    return fileName;
+}
+
+- (NSString *)getFileNameFromPHAsset:(PHAsset *)phAsset originalFileName:(NSString *)originalFileName 
 {
-    NSString *fileName = [[NSUUID UUID] UUIDString];
-    fileName = [fileName stringByAppendingString:@"."];
-    return [fileName stringByAppendingString:fileType];
+    if (phAsset) {
+        NSArray *resources = [PHAssetResource assetResourcesForAsset:phAsset];
+        PHAssetResource *resource = resources.firstObject;
+        if (resource.originalFilename) {
+            return resource.originalFilename;
+        }
+    }
+    return originalFileName ? originalFileName : [[NSUUID UUID] UUIDString];
 }
 
 + (UIImage *)getUIImageFromInfo:(NSDictionary *)info
@@ -456,8 +482,9 @@ CGImagePropertyOrientation CGImagePropertyOrientationForUIImageOrientation(UIIma
 
         if ([info[UIImagePickerControllerMediaType] isEqualToString:(NSString *) kUTTypeImage]) {
             UIImage *image = [ImagePickerManager getUIImageFromInfo:info];
-
-            [assets addObject:[self mapImageToAsset:image data:[NSData dataWithContentsOfURL:[ImagePickerManager getNSURLFromInfo:info]] phAsset:asset]];
+            NSString *originalFileName = [self extractFileNameFromInfo:info];
+            
+            [assets addObject:[self mapImageToAsset:image data:[NSData dataWithContentsOfURL:[ImagePickerManager getNSURLFromInfo:info]] originalFileName:originalFileName phAsset:asset]];
         } else {
             NSError *error;
             NSDictionary *videoAsset = [self mapVideoToAsset:info[UIImagePickerControllerMediaURL] phAsset:asset error:&error];
@@ -549,8 +576,9 @@ CGImagePropertyOrientation CGImagePropertyOrientationForUIImageOrientation(UIIma
             [provider loadFileRepresentationForTypeIdentifier:identifier completionHandler:^(NSURL * _Nullable url, NSError * _Nullable error) {
                 NSData *data = [[NSData alloc] initWithContentsOfURL:url];
                 UIImage *image = [[UIImage alloc] initWithData:data];
+                NSString *originalFileName = url.lastPathComponent;
 
-                assets[index] = [self mapImageToAsset:image data:data phAsset:asset];
+                assets[index] = [self mapImageToAsset:image data:data originalFileName:originalFileName phAsset:asset];
                 dispatch_group_leave(completionGroup);
             }];
         } else if ([provider hasItemConformingToTypeIdentifier:(NSString *)kUTTypeMovie]) {
